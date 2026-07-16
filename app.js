@@ -7,6 +7,8 @@ import {
 const LM = {
   NOSE: 0,
   L_SHOULDER: 11, R_SHOULDER: 12,
+  L_ELBOW: 13, R_ELBOW: 14,
+  L_WRIST: 15, R_WRIST: 16,
   L_HIP: 23, R_HIP: 24,
   L_KNEE: 25, R_KNEE: 26,
   L_ANKLE: 27, R_ANKLE: 28,
@@ -22,6 +24,40 @@ const SKELETON = [
 ];
 
 const SAMPLE_FPS = 12;
+
+// ---- 운동별 설정 ----
+const EX_INFO = {
+  squat: {
+    name: "스쿼트",
+    tips: [
+      "<strong>측면(옆모습)</strong>에서 촬영해 주세요 — 깊이와 무릎 위치 판정에 필수예요.",
+      "머리부터 발끝까지 <strong>전신</strong>이 화면에 들어오게 해주세요.",
+      "카메라를 고정하고(삼각대·선반), 밝은 곳에서 찍어주세요.",
+      "한 영상에 <strong>한 사람</strong>만 나오는 게 좋아요.",
+    ],
+    noMotionMsg: "스쿼트 동작(앉았다 일어나기)을 찾지 못했어요. 전신 측면 영상인지, 운동 선택이 맞는지 확인해 주세요.",
+  },
+  pushup: {
+    name: "푸시업",
+    tips: [
+      "<strong>측면(옆모습)</strong>에서 촬영해 주세요 — 팔꿈치 각도와 몸통 일직선 판정에 필수예요.",
+      "머리부터 발끝까지 <strong>전신</strong>이 화면에 들어오게 해주세요.",
+      "카메라를 <strong>바닥 가까이 낮게</strong> 두면 훨씬 정확해요.",
+      "한 영상에 <strong>한 사람</strong>만 나오는 게 좋아요.",
+    ],
+    noMotionMsg: "푸시업 동작(내려갔다 올라오기)을 찾지 못했어요. 전신 측면 영상인지, 운동 선택이 맞는지 확인해 주세요.",
+  },
+  plank: {
+    name: "플랭크",
+    tips: [
+      "<strong>측면(옆모습)</strong>에서 촬영해 주세요 — 몸 일직선 판정에 필수예요.",
+      "머리부터 발끝까지 <strong>전신</strong>이 화면에 들어오게 해주세요.",
+      "카메라를 <strong>바닥 가까이 낮게</strong> 두면 훨씬 정확해요.",
+      "<strong>10초 이상</strong> 유지하는 영상이 좋아요.",
+    ],
+    noMotionMsg: "플랭크 유지 구간(몸을 수평으로 버티기)을 찾지 못했어요. 전신 측면 영상인지, 운동 선택이 맞는지 확인해 주세요.",
+  },
+};
 
 // ---- DOM ----
 const $ = (id) => document.getElementById(id);
@@ -43,6 +79,21 @@ let frames = [];        // { t, lm } — 분석된 프레임별 랜드마크
 let analysis = null;
 let currentUrl = null;
 let lastTs = 0;         // MediaPipe VIDEO 모드는 타임스탬프가 계속 증가해야 함 (영상 간에도)
+let exercise = "squat";
+
+// ---- 운동 선택 ----
+function renderTips() {
+  $("tips-list").innerHTML = EX_INFO[exercise].tips.map((t) => `<li>${t}</li>`).join("");
+}
+document.querySelectorAll(".ex-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    exercise = btn.dataset.ex;
+    document.querySelectorAll(".ex-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    renderTips();
+    errorBanner.hidden = true;
+  });
+});
+renderTips();
 
 // ---- 초기화 ----
 async function init() {
@@ -178,13 +229,23 @@ async function startAnalysis(file) {
   }
 
   $("analyze-caption").textContent = "자세를 판정하고 있어요";
-  analysis = analyzeSquat(frames, probe.videoWidth, probe.videoHeight);
+  const vw = probe.videoWidth, vh = probe.videoHeight;
+  if (exercise === "squat") analysis = analyzeSquat(frames, vw, vh);
+  else if (exercise === "pushup") analysis = analyzePushup(frames, vw, vh);
+  else analysis = analyzePlank(frames, vw, vh);
   window.__fc = analysis; // 판정 기준 튜닝용 디버그
 
-  if (analysis.reps.length === 0) {
+  if (analysis.notHorizontal) {
     showError(
-      "스쿼트 동작(앉았다 일어나기)을 찾지 못했어요. 전신 측면 영상인지 확인해 주세요."
+      `몸이 수평인 자세를 찾지 못했어요. ${EX_INFO[exercise].name}은(는) 옆에서, 바닥과 전신이 나오게 찍어주세요. 운동 선택이 맞는지도 확인해 주세요!`
     );
+    return;
+  }
+  const empty =
+    (analysis.kind === "reps" && analysis.reps.length === 0) ||
+    (analysis.kind === "hold" && !analysis.holdDur);
+  if (empty) {
+    showError(EX_INFO[exercise].noMotionMsg);
     return;
   }
 
@@ -210,7 +271,7 @@ function seekTo(video, t) {
   });
 }
 
-// ---- 스쿼트 분석 ----
+// ---- 공용 기하 도구 ----
 function px(lm, i, vw, vh) {
   return { x: lm[i].x * vw, y: lm[i].y * vh };
 }
@@ -233,15 +294,38 @@ function median3(arr) {
   });
 }
 
-function analyzeSquat(frames, vw, vh) {
-  // 어느 쪽(좌/우)이 카메라에 더 잘 보이는지 선택
+// 어깨→발목 직선 대비 엉덩이의 처짐 정도.
+// 양수 = 화면상 선보다 아래(엉덩이 처짐), 음수 = 위(엉덩이 솟음). 몸 길이로 정규화.
+function sagRatio(shoulder, hip, ankle) {
+  const len = Math.hypot(ankle.x - shoulder.x, ankle.y - shoulder.y) || 1;
+  const cross =
+    (ankle.x - shoulder.x) * (hip.y - shoulder.y) -
+    (ankle.y - shoulder.y) * (hip.x - shoulder.x);
+  const mult = ankle.x >= shoulder.x ? 1 : -1;
+  return (cross / len / len) * mult;
+}
+
+// 어깨→발목 벡터가 수평에서 벗어난 각도 (0 = 완전 수평)
+function bodyTilt(shoulder, ankle) {
+  return (Math.atan2(Math.abs(ankle.y - shoulder.y), Math.abs(ankle.x - shoulder.x)) * 180) / Math.PI;
+}
+
+// 좌/우 중 카메라에 더 잘 보이는 쪽의 관절 세트 선택
+function pickSide(frames, idxList) {
   const vis = (f, i) => f.lm[i].visibility ?? 1;
-  let leftVis = 0, rightVis = 0;
+  let left = 0, right = 0;
   frames.forEach((f) => {
-    leftVis += vis(f, LM.L_HIP) + vis(f, LM.L_KNEE) + vis(f, LM.L_ANKLE);
-    rightVis += vis(f, LM.R_HIP) + vis(f, LM.R_KNEE) + vis(f, LM.R_ANKLE);
+    idxList.forEach(([l, r]) => {
+      left += vis(f, l);
+      right += vis(f, r);
+    });
   });
-  const useLeft = leftVis >= rightVis;
+  return left >= right;
+}
+
+// ---- 스쿼트 분석 ----
+function analyzeSquat(frames, vw, vh) {
+  const useLeft = pickSide(frames, [[LM.L_HIP, LM.R_HIP], [LM.L_KNEE, LM.R_KNEE], [LM.L_ANKLE, LM.R_ANKLE]]);
   const S = useLeft
     ? { sh: LM.L_SHOULDER, hip: LM.L_HIP, knee: LM.L_KNEE, ankle: LM.L_ANKLE, foot: LM.L_FOOT }
     : { sh: LM.R_SHOULDER, hip: LM.R_HIP, knee: LM.R_KNEE, ankle: LM.R_ANKLE, foot: LM.R_FOOT };
@@ -266,9 +350,8 @@ function analyzeSquat(frames, vw, vh) {
     noseX += f.lm[LM.NOSE].x;
     hipX += f.lm[S.hip].x;
   });
-  const dir = noseX > hipX ? 1 : -1; // 1 = 오른쪽을 보고 있음
+  const dir = noseX > hipX ? 1 : -1;
 
-  // 프레임별 지표
   const metrics = frames.map((f) => {
     const sh = px(f.lm, S.sh, vw, vh);
     const hip = px(f.lm, S.hip, vw, vh);
@@ -276,7 +359,6 @@ function analyzeSquat(frames, vw, vh) {
     const ankle = px(f.lm, S.ankle, vw, vh);
     const foot = px(f.lm, S.foot, vw, vh);
     const kneeAngle = angleAt(hip, knee, ankle);
-    // 상체 기울기: 수직 대비 (0 = 꼿꼿, 90 = 수평)
     const dx = sh.x - hip.x, dy = hip.y - sh.y;
     const torsoLean = (Math.atan2(Math.abs(dx), Math.max(dy, 1)) * 180) / Math.PI;
     const shin = Math.hypot(knee.x - ankle.x, knee.y - ankle.y) || 1;
@@ -287,7 +369,6 @@ function analyzeSquat(frames, vw, vh) {
 
   const kneeSeries = median3(metrics.map((m) => m.kneeAngle));
 
-  // 반복(rep) 검출: 무릎 각도 상태 머신
   const reps = [];
   let state = "up";
   let startIdx = 0, minIdx = 0, minAngle = 180;
@@ -305,32 +386,37 @@ function analyzeSquat(frames, vw, vh) {
         minIdx = i;
       }
       if (ang > 160) {
-        if (minAngle < 130) {
-          reps.push(buildRep(metrics, startIdx, minIdx, i, frontView));
-        }
+        if (minAngle < 130) reps.push(buildSquatRep(metrics, startIdx, minIdx, i, frontView));
         state = "up";
       }
     }
   });
-  // 영상이 최저점 근처에서 끝난 경우 마지막 rep 마무리
   if (state === "down" && minAngle < 130) {
-    reps.push(buildRep(metrics, startIdx, minIdx, kneeSeries.length - 1, frontView));
+    reps.push(buildSquatRep(metrics, startIdx, minIdx, kneeSeries.length - 1, frontView));
   }
 
   const avgScore = reps.length
     ? Math.round(reps.reduce((s, r) => s + r.score, 0) / reps.length)
     : 0;
+  const avgDur = reps.length ? reps.reduce((s, r) => s + r.duration, 0) / reps.length : 0;
 
-  return { reps, avgScore, frontView, useLeft, side: S, kneeSeries, metrics };
+  return {
+    kind: "reps",
+    reps,
+    avgScore,
+    frontView,
+    statsText: `스쿼트 ${reps.length}회 감지 · 평균 ${avgDur.toFixed(1)}초/회`,
+    kneeSeries,
+    metrics,
+  };
 }
 
-function buildRep(metrics, startIdx, minIdx, endIdx, frontView) {
+function buildSquatRep(metrics, startIdx, minIdx, endIdx, frontView) {
   const bottom = metrics[minIdx];
   const duration = metrics[endIdx].t - metrics[startIdx].t;
   const issues = [];
   let score = 100;
 
-  // 깊이
   let depth;
   if (bottom.kneeAngle <= 95 || bottom.hipBelowKnee) {
     depth = { label: "충분한 깊이", cls: "good" };
@@ -346,19 +432,16 @@ function buildRep(metrics, startIdx, minIdx, endIdx, frontView) {
     score -= 25;
   }
 
-  // 상체 기울기 (최저점 기준)
   if (bottom.torsoLean > 55) {
     issues.push("🔺 최저점에서 상체가 많이 숙여졌어요. 가슴을 들고 시선은 정면을 유지해 보세요.");
     score -= 15;
   }
 
-  // 무릎 전방 이동 (정면 영상이면 판정 생략)
   if (!frontView && bottom.kneeForward > 0.45) {
     issues.push("💡 무릎이 발끝을 크게 넘었어요. 통증이 없다면 괜찮지만, 엉덩이를 먼저 뒤로 빼는 느낌으로 시작해 보세요.");
     score -= 10;
   }
 
-  // 템포
   if (duration < 1.2) {
     issues.push("⏱️ 템포가 빨라요. 내려갈 때 2초 정도로 천천히 통제해 보세요.");
     score -= 8;
@@ -369,104 +452,360 @@ function buildRep(metrics, startIdx, minIdx, endIdx, frontView) {
     startT: metrics[startIdx].t,
     bottomT: bottom.t,
     endT: metrics[endIdx].t,
-    minKneeAngle: Math.round(bottom.kneeAngle),
-    torsoLean: Math.round(bottom.torsoLean),
     duration,
     depth,
     issues,
     score,
+    metaText: `최저점 무릎 각도 ${Math.round(bottom.kneeAngle)}° · 상체 기울기 ${Math.round(bottom.torsoLean)}° · ${duration.toFixed(1)}초`,
+  };
+}
+
+// ---- 푸시업 분석 ----
+function analyzePushup(frames, vw, vh) {
+  const useLeft = pickSide(frames, [
+    [LM.L_SHOULDER, LM.R_SHOULDER],
+    [LM.L_ELBOW, LM.R_ELBOW],
+    [LM.L_WRIST, LM.R_WRIST],
+  ]);
+  const S = useLeft
+    ? { sh: LM.L_SHOULDER, el: LM.L_ELBOW, wr: LM.L_WRIST, hip: LM.L_HIP, ankle: LM.L_ANKLE }
+    : { sh: LM.R_SHOULDER, el: LM.R_ELBOW, wr: LM.R_WRIST, hip: LM.R_HIP, ankle: LM.R_ANKLE };
+
+  const metrics = frames.map((f) => {
+    const sh = px(f.lm, S.sh, vw, vh);
+    const el = px(f.lm, S.el, vw, vh);
+    const wr = px(f.lm, S.wr, vw, vh);
+    const hip = px(f.lm, S.hip, vw, vh);
+    const ankle = px(f.lm, S.ankle, vw, vh);
+    return {
+      t: f.t,
+      elbowAngle: angleAt(sh, el, wr),
+      sag: sagRatio(sh, hip, ankle),
+      tilt: bodyTilt(sh, ankle),
+    };
+  });
+
+  // 몸이 수평인 프레임이 대부분이어야 푸시업 영상
+  const horizPct = metrics.filter((m) => m.tilt < 40).length / metrics.length;
+  if (horizPct < 0.5) return { kind: "reps", reps: [], notHorizontal: true };
+
+  const elbowSeries = median3(metrics.map((m) => m.elbowAngle));
+
+  const reps = [];
+  let state = "up";
+  let startIdx = 0, minIdx = 0, minAngle = 180;
+  elbowSeries.forEach((ang, i) => {
+    if (state === "up") {
+      if (ang < 140) {
+        state = "down";
+        startIdx = Math.max(0, i - 2);
+        minAngle = ang;
+        minIdx = i;
+      }
+    } else {
+      if (ang < minAngle) {
+        minAngle = ang;
+        minIdx = i;
+      }
+      if (ang > 150) {
+        if (minAngle < 120) reps.push(buildPushupRep(metrics, startIdx, minIdx, i));
+        state = "up";
+      }
+    }
+  });
+  if (state === "down" && minAngle < 120) {
+    reps.push(buildPushupRep(metrics, startIdx, minIdx, elbowSeries.length - 1));
+  }
+
+  const avgScore = reps.length
+    ? Math.round(reps.reduce((s, r) => s + r.score, 0) / reps.length)
+    : 0;
+  const avgDur = reps.length ? reps.reduce((s, r) => s + r.duration, 0) / reps.length : 0;
+
+  return {
+    kind: "reps",
+    reps,
+    avgScore,
+    frontView: false,
+    statsText: `푸시업 ${reps.length}회 감지 · 평균 ${avgDur.toFixed(1)}초/회`,
+    elbowSeries,
+    metrics,
+  };
+}
+
+function buildPushupRep(metrics, startIdx, minIdx, endIdx) {
+  const bottom = metrics[minIdx];
+  const duration = metrics[endIdx].t - metrics[startIdx].t;
+  const issues = [];
+  let score = 100;
+
+  let depth;
+  if (bottom.elbowAngle <= 80) {
+    depth = { label: "충분한 깊이", cls: "good" };
+  } else if (bottom.elbowAngle <= 100) {
+    depth = { label: "적정 깊이", cls: "ok" };
+  } else if (bottom.elbowAngle <= 115) {
+    depth = { label: "약간 얕음", cls: "warn" };
+    issues.push("🔽 조금 더 내려가 보세요. 가슴이 바닥에 가까워질 때까지가 목표예요.");
+    score -= 12;
+  } else {
+    depth = { label: "깊이 부족", cls: "bad" };
+    issues.push("🔽 깊이가 많이 부족해요. 팔꿈치를 90도 이상 접으며 내려가 보세요.");
+    score -= 25;
+  }
+
+  // 회차 구간 내 최대 처짐/솟음
+  let maxSag = -1, maxPike = 1;
+  for (let i = startIdx; i <= endIdx; i++) {
+    if (metrics[i].sag > maxSag) maxSag = metrics[i].sag;
+    if (metrics[i].sag < maxPike) maxPike = metrics[i].sag;
+  }
+  if (maxSag > 0.07) {
+    issues.push("🔻 엉덩이가 아래로 처졌어요. 배와 엉덩이에 힘을 주고 몸을 일직선으로 유지해 보세요.");
+    score -= 15;
+  } else if (maxPike < -0.13) {
+    issues.push("🔺 엉덩이가 위로 솟았어요. 엉덩이를 낮춰 어깨부터 발목까지 일직선을 만들어 보세요.");
+    score -= 10;
+  }
+
+  if (duration < 1.0) {
+    issues.push("⏱️ 템포가 빨라요. 내려갈 때 천천히 통제하면 효과가 커져요.");
+    score -= 8;
+  }
+
+  score = Math.max(40, score);
+  return {
+    startT: metrics[startIdx].t,
+    bottomT: bottom.t,
+    endT: metrics[endIdx].t,
+    duration,
+    depth,
+    issues,
+    score,
+    metaText: `최저점 팔꿈치 각도 ${Math.round(bottom.elbowAngle)}° · ${duration.toFixed(1)}초`,
+  };
+}
+
+// ---- 플랭크 분석 ----
+function analyzePlank(frames, vw, vh) {
+  const useLeft = pickSide(frames, [
+    [LM.L_SHOULDER, LM.R_SHOULDER],
+    [LM.L_HIP, LM.R_HIP],
+    [LM.L_ANKLE, LM.R_ANKLE],
+  ]);
+  const S = useLeft
+    ? { sh: LM.L_SHOULDER, hip: LM.L_HIP, ankle: LM.L_ANKLE }
+    : { sh: LM.R_SHOULDER, hip: LM.R_HIP, ankle: LM.R_ANKLE };
+
+  const metrics = frames.map((f) => {
+    const sh = px(f.lm, S.sh, vw, vh);
+    const hip = px(f.lm, S.hip, vw, vh);
+    const ankle = px(f.lm, S.ankle, vw, vh);
+    return { t: f.t, sag: sagRatio(sh, hip, ankle), tilt: bodyTilt(sh, ankle) };
+  });
+
+  // 수평 유지 구간(최장 연속 구간, 짧은 끊김 허용) 찾기
+  const horiz = metrics.map((m) => m.tilt < 35);
+  let best = { start: -1, end: -1 };
+  let runStart = -1, gap = 0;
+  for (let i = 0; i <= horiz.length; i++) {
+    if (i < horiz.length && horiz[i]) {
+      if (runStart === -1) runStart = i;
+      gap = 0;
+    } else if (runStart !== -1) {
+      gap++;
+      if (gap > 3 || i === horiz.length) {
+        const end = i - gap;
+        if (end - runStart > best.end - best.start) best = { start: runStart, end };
+        runStart = -1;
+        gap = 0;
+      }
+    }
+  }
+  if (best.start === -1) return { kind: "hold", holdDur: 0, notHorizontal: true };
+
+  const hold = metrics.slice(best.start, best.end + 1);
+  const holdDur = hold[hold.length - 1].t - hold[0].t;
+  if (holdDur < 3) return { kind: "hold", holdDur: 0 };
+
+  // 프레임별 정렬 판정
+  const SAG_TH = 0.06, PIKE_TH = -0.13;
+  const cls = hold.map((m) => (m.sag > SAG_TH ? "sag" : m.sag < PIKE_TH ? "pike" : "good"));
+
+  // 문제 구간(0.5초 이상 연속) 추출
+  const segments = [];
+  let segStart = -1, segType = null;
+  for (let i = 0; i <= cls.length; i++) {
+    const c = i < cls.length ? cls[i] : "good";
+    if (c !== "good" && segType === null) {
+      segStart = i;
+      segType = c;
+    } else if (segType !== null && c !== segType) {
+      if (i - segStart >= Math.round(SAMPLE_FPS * 0.5)) {
+        segments.push({ startT: hold[segStart].t, endT: hold[i - 1].t, type: segType });
+      }
+      segType = c !== "good" ? c : null;
+      segStart = i;
+    }
+  }
+
+  const badFrames = cls.filter((c) => c !== "good").length;
+  const goodPct = Math.round(((cls.length - badFrames) / cls.length) * 100);
+  const sagTime = (cls.filter((c) => c === "sag").length / SAMPLE_FPS);
+  const pikeTime = (cls.filter((c) => c === "pike").length / SAMPLE_FPS);
+  const score = Math.max(
+    40,
+    Math.min(100, Math.round(100 - (sagTime / holdDur) * 80 - (pikeTime / holdDur) * 50))
+  );
+
+  const lines = [];
+  const sagSegs = segments.filter((s) => s.type === "sag");
+  const pikeSegs = segments.filter((s) => s.type === "pike");
+  if (sagSegs.length)
+    lines.push(`🔻 엉덩이 처짐 ${sagSegs.length}구간 · 총 ${sagTime.toFixed(1)}초 — 배꼽을 등 쪽으로 당기고 엉덩이에 힘을 주세요.`);
+  if (pikeSegs.length)
+    lines.push(`🔺 엉덩이 솟음 ${pikeSegs.length}구간 · 총 ${pikeTime.toFixed(1)}초 — 엉덩이를 낮춰 어깨~발목 일직선을 만들어 보세요.`);
+  if (!lines.length) lines.push("✅ 유지 시간 내내 몸 정렬이 훌륭해요. 지금 폼을 유지하세요!");
+
+  return {
+    kind: "hold",
+    score,
+    holdStart: hold[0].t,
+    holdEnd: hold[hold.length - 1].t,
+    holdDur,
+    goodPct,
+    segments,
+    lines,
+    statsText: `플랭크 ${holdDur.toFixed(1)}초 유지 · 정렬 유지율 ${goodPct}%`,
+    metrics,
   };
 }
 
 // ---- 결과 렌더링 ----
+function gradeOf(score) {
+  return score >= 90 ? "훌륭해요! 💪" :
+    score >= 75 ? "좋아요 👍" :
+    score >= 60 ? "괜찮아요, 조금만 다듬으면 돼요" :
+    "개선 포인트가 보여요";
+}
+
+function seekPlayer(t) {
+  player.currentTime = t;
+  player.pause();
+}
+
 function renderResult(duration) {
   showScreen("result");
-  $("view-warning").hidden = !analysis.frontView;
+  $("view-warning").hidden = !(exercise === "squat" && analysis.frontView);
 
   player.src = currentUrl;
   player.load();
 
-  // 요약 카드
-  const { reps, avgScore } = analysis;
-  const grade =
-    avgScore >= 90 ? "훌륭해요! 💪" :
-    avgScore >= 75 ? "좋아요 👍" :
-    avgScore >= 60 ? "괜찮아요, 조금만 다듬으면 돼요" :
-    "개선 포인트가 보여요";
-
-  const issueCount = {};
-  reps.forEach((r) => r.issues.forEach((i) => (issueCount[i] = (issueCount[i] || 0) + 1)));
-  const topIssues = Object.entries(issueCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
-
-  const avgDur = reps.reduce((s, r) => s + r.duration, 0) / reps.length;
-  let lines = "";
-  if (topIssues.length === 0) {
-    lines = "<p>✅ 모든 회차에서 특별한 문제를 찾지 못했어요. 지금 폼을 유지하세요!</p>";
-  } else {
-    lines = topIssues
-      .map(([msg, n]) => `<p>${msg} <span style="color:var(--muted)">(${n}/${reps.length}회)</span></p>`)
-      .join("");
-  }
-
-  $("summary-card").innerHTML = `
-    <div class="summary-top">
-      <div class="score-ring" style="--pct:${avgScore}">
-        <div class="num">${avgScore}</div>
-        <div class="cap">평균 점수</div>
-      </div>
-      <div>
-        <div class="summary-title">${grade}</div>
-        <div class="summary-stats">스쿼트 ${reps.length}회 감지 · 평균 ${avgDur.toFixed(1)}초/회</div>
-      </div>
-    </div>
-    <div class="summary-lines">${lines}</div>
-  `;
-
-  // 타임라인 마커
   const timeline = $("timeline");
   timeline.innerHTML = "";
-  reps.forEach((r, i) => {
-    const btn = document.createElement("button");
-    btn.className = "rep-marker" + (r.issues.length ? " has-issue" : "");
-    btn.style.left = `${(r.bottomT / duration) * 100}%`;
-    btn.textContent = i + 1;
-    btn.title = `${i + 1}회차로 이동`;
-    btn.onclick = () => {
-      player.currentTime = r.bottomT;
-      player.pause();
-    };
-    timeline.appendChild(btn);
-  });
 
-  // 회차 카드
-  $("rep-cards").innerHTML = reps
-    .map(
-      (r, i) => `
-    <div class="rep-card" data-t="${r.bottomT}">
-      <div class="rep-head">
-        <span class="rep-num">${i + 1}회차</span>
-        <span class="badge ${r.depth.cls}">${r.depth.label}</span>
-        <span class="rep-score">${r.score}점</span>
-      </div>
-      <div class="rep-meta">최저점 무릎 각도 ${r.minKneeAngle}° · 상체 기울기 ${r.torsoLean}° · ${r.duration.toFixed(1)}초</div>
-      ${
-        r.issues.length
-          ? `<div class="rep-issues">${r.issues.map((x) => `<div>${x}</div>`).join("")}</div>`
-          : `<div class="rep-clean">✅ 좋은 자세예요</div>`
-      }
-    </div>`
-    )
-    .join("");
-  document.querySelectorAll(".rep-card").forEach((card) => {
-    card.onclick = () => {
-      player.currentTime = parseFloat(card.dataset.t);
-      player.pause();
-    };
+  if (analysis.kind === "reps") {
+    const { reps, avgScore, statsText } = analysis;
+
+    const issueCount = {};
+    reps.forEach((r) => r.issues.forEach((i) => (issueCount[i] = (issueCount[i] || 0) + 1)));
+    const topIssues = Object.entries(issueCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const lines = topIssues.length
+      ? topIssues
+          .map(([msg, n]) => `<p>${msg} <span style="color:var(--muted)">(${n}/${reps.length}회)</span></p>`)
+          .join("")
+      : "<p>✅ 모든 회차에서 특별한 문제를 찾지 못했어요. 지금 폼을 유지하세요!</p>";
+
+    renderSummary(avgScore, statsText, lines);
+    $("timeline-label").textContent = "회차별 최저 지점 — 눌러서 이동";
+
+    reps.forEach((r, i) => {
+      timeline.appendChild(makeMarker(i + 1, r.bottomT / duration, r.issues.length > 0, () => seekPlayer(r.bottomT)));
+    });
+
+    $("rep-cards").innerHTML = reps
+      .map(
+        (r, i) => `
+      <div class="rep-card" data-t="${r.bottomT}">
+        <div class="rep-head">
+          <span class="rep-num">${i + 1}회차</span>
+          <span class="badge ${r.depth.cls}">${r.depth.label}</span>
+          <span class="rep-score">${r.score}점</span>
+        </div>
+        <div class="rep-meta">${r.metaText}</div>
+        ${
+          r.issues.length
+            ? `<div class="rep-issues">${r.issues.map((x) => `<div>${x}</div>`).join("")}</div>`
+            : `<div class="rep-clean">✅ 좋은 자세예요</div>`
+        }
+      </div>`
+      )
+      .join("");
+  } else {
+    // 플랭크(유지형)
+    const { score, statsText, lines, segments, holdStart } = analysis;
+    renderSummary(score, statsText, lines.map((l) => `<p>${l}</p>`).join(""));
+    $("timeline-label").textContent = "자세가 무너진 구간 — 눌러서 이동";
+
+    if (segments.length === 0) {
+      timeline.appendChild(makeMarker("✓", holdStart / duration, false, () => seekPlayer(holdStart)));
+    }
+    segments.forEach((s, i) => {
+      timeline.appendChild(makeMarker(i + 1, s.startT / duration, true, () => seekPlayer(s.startT)));
+    });
+
+    const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+    $("rep-cards").innerHTML = segments.length
+      ? segments
+          .map(
+            (s, i) => `
+        <div class="rep-card" data-t="${s.startT}">
+          <div class="rep-head">
+            <span class="rep-num">구간 ${i + 1}</span>
+            <span class="badge ${s.type === "sag" ? "bad" : "warn"}">${s.type === "sag" ? "엉덩이 처짐" : "엉덩이 솟음"}</span>
+            <span class="rep-score">${fmt(s.startT)}~${fmt(s.endT)}</span>
+          </div>
+          <div class="rep-meta">${
+            s.type === "sag"
+              ? "허리에 부담이 가는 자세예요. 배에 힘을 주고 골반을 살짝 말아 올려 보세요."
+              : "코어 자극이 줄어드는 자세예요. 엉덩이를 낮춰 일직선을 만들어 보세요."
+          }</div>
+        </div>`
+          )
+          .join("")
+      : `<div class="rep-card"><div class="rep-clean">✅ 유지 시간 내내 무너진 구간이 없어요. 훌륭한 플랭크예요!</div></div>`;
+  }
+
+  document.querySelectorAll(".rep-card[data-t]").forEach((card) => {
+    card.onclick = () => seekPlayer(parseFloat(card.dataset.t));
   });
 
   setupOverlay();
+}
+
+function renderSummary(score, statsText, linesHtml) {
+  $("summary-card").innerHTML = `
+    <div class="summary-top">
+      <div class="score-ring" style="--pct:${score}">
+        <div class="num">${score}</div>
+        <div class="cap">${analysis.kind === "hold" ? "자세 점수" : "평균 점수"}</div>
+      </div>
+      <div>
+        <div class="summary-title">${gradeOf(score)}</div>
+        <div class="summary-stats">${statsText}</div>
+      </div>
+    </div>
+    <div class="summary-lines">${linesHtml}</div>
+  `;
+}
+
+function makeMarker(label, pos, hasIssue, onClick) {
+  const btn = document.createElement("button");
+  btn.className = "rep-marker" + (hasIssue ? " has-issue" : "");
+  btn.style.left = `${Math.min(0.97, Math.max(0.03, pos)) * 100}%`;
+  btn.textContent = label;
+  btn.onclick = onClick;
+  return btn;
 }
 
 // ---- 스켈레톤 오버레이 ----
@@ -497,7 +836,6 @@ function setupOverlay() {
     const f = nearestFrame(player.currentTime);
     if (!f) return;
 
-    // 영상이 letterbox 없이 꽉 차게 렌더링된다고 가정 (object-fit 기본 contain 대응)
     const vw = player.videoWidth, vh = player.videoHeight;
     const cw = overlay.width, ch = overlay.height;
     const scale = Math.min(cw / vw, ch / vh);

@@ -77,6 +77,32 @@ main {
 }
 .sub { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
 
+/* 운동 선택 */
+.ex-select {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.ex-btn {
+  flex: 1;
+  padding: 12px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.ex-btn:hover { border-color: var(--accent-dim); }
+.ex-btn.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--card-2);
+}
+
 /* 업로드 */
 #drop-zone {
   display: block;

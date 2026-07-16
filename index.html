@@ -8,15 +8,21 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="logo">🏋️ 폼코치 <span class="beta">스쿼트 베타</span></div>
+    <div class="logo">🏋️ 폼코치 <span class="beta">홈트 베타</span></div>
     <div id="model-status" class="model-status loading">AI 모델 불러오는 중…</div>
   </header>
 
   <main>
     <!-- 1. 업로드 화면 -->
     <section id="screen-upload" class="screen">
-      <h1>스쿼트 영상을 올리면<br />AI가 자세를 분석해드려요</h1>
+      <h1>운동 영상을 올리면<br />AI가 자세를 분석해드려요</h1>
       <p class="sub">영상은 기기 밖으로 전송되지 않아요. 모든 분석은 이 브라우저 안에서만 이루어집니다.</p>
+
+      <div class="ex-select" id="ex-select">
+        <button class="ex-btn active" data-ex="squat">🏋️ 스쿼트</button>
+        <button class="ex-btn" data-ex="pushup">💪 푸시업</button>
+        <button class="ex-btn" data-ex="plank">🧘 플랭크</button>
+      </div>
 
       <label id="drop-zone" for="file-input">
         <div class="drop-icon">📹</div>
@@ -27,12 +33,7 @@
 
       <div class="tips">
         <h2>📸 이렇게 찍으면 분석이 정확해요</h2>
-        <ul>
-          <li><strong>측면(옆모습)</strong>에서 촬영해 주세요 — 깊이와 무릎 위치 판정에 필수예요.</li>
-          <li>머리부터 발끝까지 <strong>전신</strong>이 화면에 들어오게 해주세요.</li>
-          <li>카메라를 고정하고(삼각대·선반), 밝은 곳에서 찍어주세요.</li>
-          <li>한 영상에 <strong>한 사람</strong>만 나오는 게 좋아요.</li>
-        </ul>
+        <ul id="tips-list"></ul>
       </div>
     </section>
 
@@ -58,7 +59,7 @@
       </div>
 
       <div class="timeline-wrap">
-        <div class="timeline-label">회차별 최저 지점 — 눌러서 이동</div>
+        <div class="timeline-label" id="timeline-label">회차별 최저 지점 — 눌러서 이동</div>
         <div id="timeline" class="timeline"></div>
       </div>
 
