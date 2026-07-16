@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>폼코치 — AI 스쿼트 자세 분석</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">🏋️ 폼코치 <span class="beta">스쿼트 베타</span></div>
+    <div id="model-status" class="model-status loading">AI 모델 불러오는 중…</div>
+  </header>
+
+  <main>
+    <!-- 1. 업로드 화면 -->
+    <section id="screen-upload" class="screen">
+      <h1>스쿼트 영상을 올리면<br />AI가 자세를 분석해드려요</h1>
+      <p class="sub">영상은 기기 밖으로 전송되지 않아요. 모든 분석은 이 브라우저 안에서만 이루어집니다.</p>
+
+      <label id="drop-zone" for="file-input">
+        <div class="drop-icon">📹</div>
+        <div class="drop-text"><strong>영상 선택</strong> 또는 여기로 드래그</div>
+        <div class="drop-hint">MP4 · MOV · WebM / 90초 이내 권장</div>
+        <input id="file-input" type="file" accept="video/*" hidden />
+      </label>
+
+      <div class="tips">
+        <h2>📸 이렇게 찍으면 분석이 정확해요</h2>
+        <ul>
+          <li><strong>측면(옆모습)</strong>에서 촬영해 주세요 — 깊이와 무릎 위치 판정에 필수예요.</li>
+          <li>머리부터 발끝까지 <strong>전신</strong>이 화면에 들어오게 해주세요.</li>
+          <li>카메라를 고정하고(삼각대·선반), 밝은 곳에서 찍어주세요.</li>
+          <li>한 영상에 <strong>한 사람</strong>만 나오는 게 좋아요.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2. 분석 중 화면 -->
+    <section id="screen-analyzing" class="screen" hidden>
+      <h1>분석 중이에요…</h1>
+      <p class="sub" id="analyze-caption">영상에서 관절 위치를 읽고 있어요</p>
+      <div class="progress-wrap">
+        <div id="progress-bar" class="progress-bar"></div>
+      </div>
+      <div id="progress-label" class="progress-label">0%</div>
+    </section>
+
+    <!-- 3. 결과 화면 -->
+    <section id="screen-result" class="screen" hidden>
+      <div id="view-warning" class="banner warn" hidden>
+        ⚠️ 정면에서 찍은 영상 같아요. 깊이·무릎 판정이 부정확할 수 있어요. 다음엔 <strong>측면</strong>에서 찍어보세요!
+      </div>
+
+      <div class="player-wrap">
+        <video id="player" playsinline controls></video>
+        <canvas id="overlay"></canvas>
+      </div>
+
+      <div class="timeline-wrap">
+        <div class="timeline-label">회차별 최저 지점 — 눌러서 이동</div>
+        <div id="timeline" class="timeline"></div>
+      </div>
+
+      <div id="summary-card" class="summary-card"></div>
+      <div id="rep-cards" class="rep-cards"></div>
+
+      <button id="reset-btn" class="reset-btn">🔄 다른 영상 분석하기</button>
+    </section>
+
+    <!-- 오류 배너 -->
+    <div id="error-banner" class="banner error" hidden></div>
+  </main>
+
+  <footer>
+    측면 촬영 기준 참고용 분석이에요. 통증이 있거나 정확한 교정이 필요하면 전문 코치와 상담하세요.
+  </footer>
+
+  <!-- 분석용 숨김 비디오 -->
+  <video id="probe" muted playsinline style="position:fixed; left:-9999px; top:0; width:320px;"></video>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
