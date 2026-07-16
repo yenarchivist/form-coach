@@ -57,6 +57,39 @@ const EX_INFO = {
     ],
     noMotionMsg: "플랭크 유지 구간(몸을 수평으로 버티기)을 찾지 못했어요. 전신 측면 영상인지, 운동 선택이 맞는지 확인해 주세요.",
   },
+  bulgarian: {
+    name: "불가리안 스플릿 스쿼트",
+    tips: [
+      "<strong>측면(옆모습)</strong>에서 촬영해 주세요 — 앞무릎 각도 판정에 필수예요.",
+      "머리부터 <strong>뒷발(벤치 위)</strong>까지 전신이 화면에 들어오게 해주세요.",
+      "덤벨은 몸 옆에 들면 인식에 방해되지 않아요.",
+      "한 영상에 <strong>한쪽 다리 세트</strong>만 담으면 좌우 비교가 쉬워요.",
+    ],
+    noMotionMsg: "불가리안 스플릿 스쿼트 동작(앉았다 일어나기)을 찾지 못했어요. 전신 측면 영상인지, 운동 선택이 맞는지 확인해 주세요.",
+  },
+  rdl: {
+    name: "루마니안 데드리프트",
+    tips: [
+      "<strong>측면(옆모습)</strong>에서 촬영해 주세요 — 힙힌지와 바 궤적 판정에 필수예요.",
+      "머리부터 발끝까지 <strong>전신</strong>이 화면에 들어오게 해주세요.",
+      "바벨·덤벨을 <strong>몸 앞에</strong> 들고 있는 표준 자세 기준이에요.",
+      "카메라를 고정하고, 밝은 곳에서 찍어주세요.",
+    ],
+    noMotionMsg: "루마니안 데드리프트 동작(엉덩이 접었다 펴기)을 찾지 못했어요. 전신 측면 영상인지, 운동 선택이 맞는지 확인해 주세요.",
+    note: "🔍 참고: AI는 등이 굽었는지 자체는 보지 못해요(관절을 직선으로만 인식). 대신 등 굽음의 전조인 \"바가 다리에서 멀어짐\"과 무릎·힙 각도를 판정해요.",
+  },
+  latpull: {
+    name: "랫풀다운",
+    tips: [
+      "<strong>측면(옆모습)</strong>에서 촬영해 주세요 — 당김 범위와 반동 판정 기준이에요.",
+      "<strong>상체와 팔 전체</strong>가 기구 프레임에 가리지 않게 찍어주세요.",
+      "하체는 기구에 가려져도 괜찮아요 — 상체만 분석해요.",
+      "카메라를 고정하고, 밝은 곳에서 찍어주세요.",
+    ],
+    noMotionMsg: "랫풀다운 동작(당겼다 올리기)을 찾지 못했어요. 상체 측면이 잘 보이는 영상인지, 운동 선택이 맞는지 확인해 주세요.",
+    skipLegCheck: true,
+    note: "🔍 랫풀다운 판정은 다른 운동보다 대략적이에요. 이유: ① 기구가 하체를 가려서 상체(당김 범위·반동)만 분석하고, ② 적정 당김 높이가 체형·그립 너비에 따라 달라서 각도 기준에 오차가 있어요. 점수는 참고용으로 보고, 반동 경고 위주로 활용해 주세요.",
+  },
 };
 
 // ---- DOM ----
@@ -216,23 +249,40 @@ async function startAnalysis(file) {
   }
 
   // 다리(무릎·발목)가 실제로 보이는지 확인 — 상반신만 나온 영상 거르기
-  const legVis =
-    frames.reduce((s, f) => {
-      const v = (i) => f.lm[i].visibility ?? 1;
-      return s + (v(LM.L_KNEE) + v(LM.R_KNEE) + v(LM.L_ANKLE) + v(LM.R_ANKLE)) / 4;
-    }, 0) / frames.length;
-  if (legVis < 0.5) {
-    showError(
-      "다리가 화면에 잘 안 보여요. 머리부터 발끝까지 전신이 나오도록 카메라를 뒤로 물려서 찍어주세요."
+  // (랫풀다운은 기구가 하체를 가리므로 대신 팔 확인)
+  const avgVis = (idxs) =>
+    frames.reduce((s, f) => s + idxs.reduce((a, i) => a + (f.lm[i].visibility ?? 1), 0) / idxs.length, 0) /
+    frames.length;
+  if (EX_INFO[exercise].skipLegCheck) {
+    const armVis = Math.max(
+      avgVis([LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST]),
+      avgVis([LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST])
     );
-    return;
+    if (armVis < 0.5) {
+      showError("팔과 상체가 잘 안 보여요. 옆에서 상체 전체가 나오게 찍어주세요.");
+      return;
+    }
+  } else {
+    const legVis = avgVis([LM.L_KNEE, LM.R_KNEE, LM.L_ANKLE, LM.R_ANKLE]);
+    if (legVis < 0.5) {
+      showError(
+        "다리가 화면에 잘 안 보여요. 머리부터 발끝까지 전신이 나오도록 카메라를 뒤로 물려서 찍어주세요."
+      );
+      return;
+    }
   }
 
   $("analyze-caption").textContent = "자세를 판정하고 있어요";
   const vw = probe.videoWidth, vh = probe.videoHeight;
-  if (exercise === "squat") analysis = analyzeSquat(frames, vw, vh);
-  else if (exercise === "pushup") analysis = analyzePushup(frames, vw, vh);
-  else analysis = analyzePlank(frames, vw, vh);
+  const ANALYZERS = {
+    squat: analyzeSquat,
+    pushup: analyzePushup,
+    plank: analyzePlank,
+    bulgarian: analyzeBulgarian,
+    rdl: analyzeRDL,
+    latpull: analyzeLatpull,
+  };
+  analysis = ANALYZERS[exercise](frames, vw, vh);
   window.__fc = analysis; // 판정 기준 튜닝용 디버그
 
   if (analysis.notHorizontal) {
@@ -310,6 +360,35 @@ function bodyTilt(shoulder, ankle) {
   return (Math.atan2(Math.abs(ankle.y - shoulder.y), Math.abs(ankle.x - shoulder.x)) * 180) / Math.PI;
 }
 
+// 수치가 내려갔다 올라오는 반복(rep) 구간 검출 — 각도·높이 등 어떤 시계열이든 사용
+function detectReps(series, { startBelow, endAbove, validBelow }) {
+  const out = [];
+  let state = "up", startIdx = 0, minIdx = 0, minVal = Infinity;
+  series.forEach((v, i) => {
+    if (state === "up") {
+      if (v < startBelow) {
+        state = "down";
+        startIdx = Math.max(0, i - 2);
+        minVal = v;
+        minIdx = i;
+      }
+    } else {
+      if (v < minVal) {
+        minVal = v;
+        minIdx = i;
+      }
+      if (v > endAbove) {
+        if (minVal < validBelow) out.push({ startIdx, minIdx, endIdx: i });
+        state = "up";
+      }
+    }
+  });
+  if (state === "down" && minVal < validBelow) {
+    out.push({ startIdx, minIdx, endIdx: series.length - 1 });
+  }
+  return out;
+}
+
 // 좌/우 중 카메라에 더 잘 보이는 쪽의 관절 세트 선택
 function pickSide(frames, idxList) {
   const vis = (f, i) => f.lm[i].visibility ?? 1;
@@ -368,32 +447,9 @@ function analyzeSquat(frames, vw, vh) {
   });
 
   const kneeSeries = median3(metrics.map((m) => m.kneeAngle));
-
-  const reps = [];
-  let state = "up";
-  let startIdx = 0, minIdx = 0, minAngle = 180;
-  kneeSeries.forEach((ang, i) => {
-    if (state === "up") {
-      if (ang < 150) {
-        state = "down";
-        startIdx = Math.max(0, i - 2);
-        minAngle = ang;
-        minIdx = i;
-      }
-    } else {
-      if (ang < minAngle) {
-        minAngle = ang;
-        minIdx = i;
-      }
-      if (ang > 160) {
-        if (minAngle < 130) reps.push(buildSquatRep(metrics, startIdx, minIdx, i, frontView));
-        state = "up";
-      }
-    }
-  });
-  if (state === "down" && minAngle < 130) {
-    reps.push(buildSquatRep(metrics, startIdx, minIdx, kneeSeries.length - 1, frontView));
-  }
+  const reps = detectReps(kneeSeries, { startBelow: 150, endAbove: 160, validBelow: 130 }).map((r) =>
+    buildSquatRep(metrics, r.startIdx, r.minIdx, r.endIdx, frontView)
+  );
 
   const avgScore = reps.length
     ? Math.round(reps.reduce((s, r) => s + r.score, 0) / reps.length)
@@ -490,32 +546,9 @@ function analyzePushup(frames, vw, vh) {
   if (horizPct < 0.5) return { kind: "reps", reps: [], notHorizontal: true };
 
   const elbowSeries = median3(metrics.map((m) => m.elbowAngle));
-
-  const reps = [];
-  let state = "up";
-  let startIdx = 0, minIdx = 0, minAngle = 180;
-  elbowSeries.forEach((ang, i) => {
-    if (state === "up") {
-      if (ang < 140) {
-        state = "down";
-        startIdx = Math.max(0, i - 2);
-        minAngle = ang;
-        minIdx = i;
-      }
-    } else {
-      if (ang < minAngle) {
-        minAngle = ang;
-        minIdx = i;
-      }
-      if (ang > 150) {
-        if (minAngle < 120) reps.push(buildPushupRep(metrics, startIdx, minIdx, i));
-        state = "up";
-      }
-    }
-  });
-  if (state === "down" && minAngle < 120) {
-    reps.push(buildPushupRep(metrics, startIdx, minIdx, elbowSeries.length - 1));
-  }
+  const reps = detectReps(elbowSeries, { startBelow: 140, endAbove: 150, validBelow: 120 }).map((r) =>
+    buildPushupRep(metrics, r.startIdx, r.minIdx, r.endIdx)
+  );
 
   const avgScore = reps.length
     ? Math.round(reps.reduce((s, r) => s + r.score, 0) / reps.length)
@@ -681,6 +714,310 @@ function analyzePlank(frames, vw, vh) {
   };
 }
 
+// ---- 불가리안 스플릿 스쿼트 분석 ----
+function analyzeBulgarian(frames, vw, vh) {
+  // 앞다리 찾기: 뒷발은 벤치 위(화면상 높음) → 발목이 더 낮은 쪽이 앞다리
+  let ly = 0, ry = 0;
+  frames.forEach((f) => {
+    ly += f.lm[LM.L_ANKLE].y;
+    ry += f.lm[LM.R_ANKLE].y;
+  });
+  const frontLeft = ly >= ry;
+  const S = frontLeft
+    ? { sh: LM.L_SHOULDER, hip: LM.L_HIP, knee: LM.L_KNEE, ankle: LM.L_ANKLE, foot: LM.L_FOOT }
+    : { sh: LM.R_SHOULDER, hip: LM.R_HIP, knee: LM.R_KNEE, ankle: LM.R_ANKLE, foot: LM.R_FOOT };
+
+  let noseX = 0, hipX = 0;
+  frames.forEach((f) => {
+    noseX += f.lm[LM.NOSE].x;
+    hipX += f.lm[S.hip].x;
+  });
+  const dir = noseX > hipX ? 1 : -1;
+
+  const metrics = frames.map((f) => {
+    const sh = px(f.lm, S.sh, vw, vh);
+    const hip = px(f.lm, S.hip, vw, vh);
+    const knee = px(f.lm, S.knee, vw, vh);
+    const ankle = px(f.lm, S.ankle, vw, vh);
+    const foot = px(f.lm, S.foot, vw, vh);
+    const kneeAngle = angleAt(hip, knee, ankle);
+    const dx = sh.x - hip.x, dy = hip.y - sh.y;
+    const torsoLean = (Math.atan2(Math.abs(dx), Math.max(dy, 1)) * 180) / Math.PI;
+    const shin = Math.hypot(knee.x - ankle.x, knee.y - ankle.y) || 1;
+    const kneeForward = ((knee.x - foot.x) * dir) / shin;
+    return { t: f.t, kneeAngle, torsoLean, kneeForward };
+  });
+
+  const kneeSeries = median3(metrics.map((m) => m.kneeAngle));
+  const reps = detectReps(kneeSeries, { startBelow: 150, endAbove: 160, validBelow: 130 }).map((r) =>
+    buildBulgarianRep(metrics, r.startIdx, r.minIdx, r.endIdx)
+  );
+
+  const avgScore = reps.length
+    ? Math.round(reps.reduce((s, r) => s + r.score, 0) / reps.length)
+    : 0;
+  const avgDur = reps.length ? reps.reduce((s, r) => s + r.duration, 0) / reps.length : 0;
+
+  return {
+    kind: "reps",
+    reps,
+    avgScore,
+    frontView: false,
+    statsText: `불가리안 ${reps.length}회 감지 (앞다리: ${frontLeft ? "왼쪽" : "오른쪽"}) · 평균 ${avgDur.toFixed(1)}초/회`,
+    kneeSeries,
+    metrics,
+  };
+}
+
+function buildBulgarianRep(metrics, startIdx, minIdx, endIdx) {
+  const bottom = metrics[minIdx];
+  const duration = metrics[endIdx].t - metrics[startIdx].t;
+  const issues = [];
+  let score = 100;
+
+  let depth;
+  if (bottom.kneeAngle <= 90) {
+    depth = { label: "충분한 깊이", cls: "good" };
+  } else if (bottom.kneeAngle <= 105) {
+    depth = { label: "적정 깊이", cls: "ok" };
+  } else if (bottom.kneeAngle <= 120) {
+    depth = { label: "약간 얕음", cls: "warn" };
+    issues.push("🔽 조금 더 깊이 앉아보세요. 앞허벅지가 바닥과 평행해질 때까지가 목표예요.");
+    score -= 12;
+  } else {
+    depth = { label: "깊이 부족", cls: "bad" };
+    issues.push("🔽 깊이가 많이 부족해요. 뒷무릎이 바닥에 가까워지도록 수직으로 앉아보세요.");
+    score -= 25;
+  }
+
+  if (bottom.torsoLean > 55) {
+    issues.push("💡 상체가 많이 숙여졌어요. 엉덩이 자극 목적이면 괜찮지만, 허벅지 위주라면 상체를 좀 더 세워보세요.");
+    score -= 8;
+  }
+
+  if (bottom.kneeForward > 0.6) {
+    issues.push("💡 앞무릎이 발끝을 많이 넘었어요. 앞정강이가 아프다면 앞발을 반 발짝 앞으로 옮겨보세요.");
+    score -= 10;
+  }
+
+  if (duration < 1.2) {
+    issues.push("⏱️ 템포가 빨라요. 균형이 흔들리기 쉬운 운동이라 천천히 통제하는 게 중요해요.");
+    score -= 8;
+  }
+
+  score = Math.max(40, score);
+  return {
+    startT: metrics[startIdx].t,
+    bottomT: bottom.t,
+    endT: metrics[endIdx].t,
+    duration,
+    depth,
+    issues,
+    score,
+    metaText: `최저점 앞무릎 각도 ${Math.round(bottom.kneeAngle)}° · 상체 기울기 ${Math.round(bottom.torsoLean)}° · ${duration.toFixed(1)}초`,
+  };
+}
+
+// ---- 루마니안 데드리프트 분석 ----
+function analyzeRDL(frames, vw, vh) {
+  const useLeft = pickSide(frames, [
+    [LM.L_HIP, LM.R_HIP],
+    [LM.L_KNEE, LM.R_KNEE],
+    [LM.L_WRIST, LM.R_WRIST],
+  ]);
+  const S = useLeft
+    ? { sh: LM.L_SHOULDER, hip: LM.L_HIP, knee: LM.L_KNEE, ankle: LM.L_ANKLE, wr: LM.L_WRIST }
+    : { sh: LM.R_SHOULDER, hip: LM.R_HIP, knee: LM.R_KNEE, ankle: LM.R_ANKLE, wr: LM.R_WRIST };
+
+  let noseX = 0, hipX = 0;
+  frames.forEach((f) => {
+    noseX += f.lm[LM.NOSE].x;
+    hipX += f.lm[S.hip].x;
+  });
+  const dir = noseX > hipX ? 1 : -1;
+
+  const metrics = frames.map((f) => {
+    const sh = px(f.lm, S.sh, vw, vh);
+    const hip = px(f.lm, S.hip, vw, vh);
+    const knee = px(f.lm, S.knee, vw, vh);
+    const ankle = px(f.lm, S.ankle, vw, vh);
+    const wr = px(f.lm, S.wr, vw, vh);
+    const hipAngle = angleAt(sh, hip, knee);
+    const kneeAngle = angleAt(hip, knee, ankle);
+    const shin = Math.hypot(knee.x - ankle.x, knee.y - ankle.y) || 1;
+    // 바(손목)가 발목 기준으로 몸 앞으로 얼마나 떨어졌나
+    const barDrift = ((wr.x - ankle.x) * dir) / shin;
+    return { t: f.t, hipAngle, kneeAngle, barDrift };
+  });
+
+  const hipSeries = median3(metrics.map((m) => m.hipAngle));
+  const reps = detectReps(hipSeries, { startBelow: 155, endAbove: 165, validBelow: 140 }).map((r) =>
+    buildRdlRep(metrics, r.startIdx, r.minIdx, r.endIdx)
+  );
+
+  const avgScore = reps.length
+    ? Math.round(reps.reduce((s, r) => s + r.score, 0) / reps.length)
+    : 0;
+  const avgDur = reps.length ? reps.reduce((s, r) => s + r.duration, 0) / reps.length : 0;
+
+  return {
+    kind: "reps",
+    reps,
+    avgScore,
+    frontView: false,
+    statsText: `루마니안 데드 ${reps.length}회 감지 · 평균 ${avgDur.toFixed(1)}초/회`,
+    hipSeries,
+    metrics,
+  };
+}
+
+function buildRdlRep(metrics, startIdx, minIdx, endIdx) {
+  const bottom = metrics[minIdx];
+  const duration = metrics[endIdx].t - metrics[startIdx].t;
+  const issues = [];
+  let score = 100;
+
+  let depth;
+  if (bottom.hipAngle <= 100) {
+    depth = { label: "충분한 가동범위", cls: "good" };
+  } else if (bottom.hipAngle <= 120) {
+    depth = { label: "적정 가동범위", cls: "ok" };
+  } else {
+    depth = { label: "가동범위 짧음", cls: "warn" };
+    issues.push("🔽 힌지가 얕아요. 햄스트링(허벅지 뒤)이 당기는 느낌이 들 때까지 엉덩이를 더 뒤로 밀어보세요.");
+    score -= 12;
+  }
+
+  // 구간 내 최소 무릎 각도 / 최대 바 이탈
+  let minKnee = 180, maxDrift = -Infinity;
+  for (let i = startIdx; i <= endIdx; i++) {
+    if (metrics[i].kneeAngle < minKnee) minKnee = metrics[i].kneeAngle;
+    if (metrics[i].barDrift > maxDrift) maxDrift = metrics[i].barDrift;
+  }
+  if (minKnee < 120) {
+    issues.push("🦵 무릎이 많이 굽었어요. 루마니안 데드는 무릎 각도를 거의 고정하고 엉덩이만 뒤로 미는 운동이에요.");
+    score -= 12;
+  }
+  if (maxDrift > 0.45) {
+    issues.push("📏 바(손)가 다리에서 멀어졌어요. 바를 허벅지에 스치듯 내려야 허리가 안전해요.");
+    score -= 15;
+  }
+
+  if (duration < 1.5) {
+    issues.push("⏱️ 템포가 빨라요. 내려갈 때 3초 정도로 천천히, 햄스트링의 저항을 느끼며 통제해 보세요.");
+    score -= 8;
+  }
+
+  score = Math.max(40, score);
+  return {
+    startT: metrics[startIdx].t,
+    bottomT: bottom.t,
+    endT: metrics[endIdx].t,
+    duration,
+    depth,
+    issues,
+    score,
+    metaText: `최저점 힙 각도 ${Math.round(bottom.hipAngle)}° · 무릎 ${Math.round(minKnee)}° · ${duration.toFixed(1)}초`,
+  };
+}
+
+// ---- 랫풀다운 분석 ----
+function analyzeLatpull(frames, vw, vh) {
+  const useLeft = pickSide(frames, [
+    [LM.L_SHOULDER, LM.R_SHOULDER],
+    [LM.L_ELBOW, LM.R_ELBOW],
+    [LM.L_WRIST, LM.R_WRIST],
+  ]);
+  const S = useLeft
+    ? { sh: LM.L_SHOULDER, el: LM.L_ELBOW, wr: LM.L_WRIST, hip: LM.L_HIP }
+    : { sh: LM.R_SHOULDER, el: LM.R_ELBOW, wr: LM.R_WRIST, hip: LM.R_HIP };
+
+  const metrics = frames.map((f) => {
+    const sh = px(f.lm, S.sh, vw, vh);
+    const el = px(f.lm, S.el, vw, vh);
+    const wr = px(f.lm, S.wr, vw, vh);
+    const hip = px(f.lm, S.hip, vw, vh);
+    const torso = Math.hypot(sh.x - hip.x, sh.y - hip.y) || 1;
+    // 손목이 어깨보다 얼마나 위에 있나 (몸통 길이 배수) — 팔 뻗으면 ~1.2+, 당기면 0 근처
+    const wristRel = (sh.y - wr.y) / torso;
+    const dx = sh.x - hip.x, dy = hip.y - sh.y;
+    const torsoLean = (Math.atan2(Math.abs(dx), Math.max(dy, 1)) * 180) / Math.PI;
+    const elbowAngle = angleAt(sh, el, wr);
+    return { t: f.t, wristRel, torsoLean, elbowAngle };
+  });
+
+  const relSeries = median3(metrics.map((m) => m.wristRel));
+
+  // 기준 상체 기울기: 팔을 뻗고 있는(당기기 전) 프레임들의 중앙값
+  const topLeans = metrics.filter((m) => m.wristRel > 0.8).map((m) => m.torsoLean).sort((a, b) => a - b);
+  const baseLean = topLeans.length ? topLeans[Math.floor(topLeans.length / 2)] : 10;
+
+  const reps = detectReps(relSeries, { startBelow: 0.7, endAbove: 0.8, validBelow: 0.45 })
+    // 진짜 당김은 최저점에서 팔꿈치가 굽어 있어야 함 — 바 잡으러 뻗는 준비 동작 걸러내기
+    .filter((r) => metrics[r.minIdx].elbowAngle < 120)
+    .map((r) => buildLatpullRep(metrics, r.startIdx, r.minIdx, r.endIdx, baseLean));
+
+  const avgScore = reps.length
+    ? Math.round(reps.reduce((s, r) => s + r.score, 0) / reps.length)
+    : 0;
+  const avgDur = reps.length ? reps.reduce((s, r) => s + r.duration, 0) / reps.length : 0;
+
+  return {
+    kind: "reps",
+    reps,
+    avgScore,
+    frontView: false,
+    statsText: `랫풀다운 ${reps.length}회 감지 · 평균 ${avgDur.toFixed(1)}초/회`,
+    relSeries,
+    metrics,
+  };
+}
+
+function buildLatpullRep(metrics, startIdx, minIdx, endIdx, baseLean) {
+  const bottom = metrics[minIdx];
+  const duration = metrics[endIdx].t - metrics[startIdx].t;
+  const issues = [];
+  let score = 100;
+
+  let depth;
+  if (bottom.wristRel <= 0.1) {
+    depth = { label: "충분히 당김", cls: "good" };
+  } else if (bottom.wristRel <= 0.3) {
+    depth = { label: "적정 범위", cls: "ok" };
+  } else {
+    depth = { label: "당김 짧음", cls: "warn" };
+    issues.push("🔽 조금 더 당겨보세요. 바가 쇄골 근처까지 내려오는 게 목표예요.");
+    score -= 10;
+  }
+
+  // 구간 내 최대 상체 기울기 (반동 판정)
+  let maxLean = 0;
+  for (let i = startIdx; i <= endIdx; i++) {
+    if (metrics[i].torsoLean > maxLean) maxLean = metrics[i].torsoLean;
+  }
+  if (maxLean - baseLean > 18) {
+    issues.push("🪑 반동으로 상체가 뒤로 많이 넘어갔어요. 가슴만 살짝 열고, 광배(등) 힘으로만 당겨보세요.");
+    score -= 15;
+  }
+
+  if (duration < 1.0) {
+    issues.push("⏱️ 템포가 빨라요. 특히 바를 올릴 때 천천히 버티면 등 자극이 커져요.");
+    score -= 8;
+  }
+
+  score = Math.max(40, score);
+  return {
+    startT: metrics[startIdx].t,
+    bottomT: bottom.t,
+    endT: metrics[endIdx].t,
+    duration,
+    depth,
+    issues,
+    score,
+    metaText: `최저점 팔꿈치 각도 ${Math.round(bottom.elbowAngle)}° · 상체 반동 +${Math.max(0, Math.round(maxLean - baseLean))}° · ${duration.toFixed(1)}초`,
+  };
+}
+
 // ---- 결과 렌더링 ----
 function gradeOf(score) {
   return score >= 90 ? "훌륭해요! 💪" :
@@ -697,6 +1034,9 @@ function seekPlayer(t) {
 function renderResult(duration) {
   showScreen("result");
   $("view-warning").hidden = !(exercise === "squat" && analysis.frontView);
+  const note = EX_INFO[exercise].note;
+  $("ex-note").textContent = note || "";
+  $("ex-note").hidden = !note;
 
   player.src = currentUrl;
   player.load();

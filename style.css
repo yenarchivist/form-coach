@@ -79,12 +79,12 @@ main {
 
 /* 운동 선택 */
 .ex-select {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   margin-bottom: 14px;
 }
 .ex-btn {
-  flex: 1;
   padding: 12px 8px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -284,6 +284,7 @@ main {
   margin-bottom: 16px;
 }
 .banner.warn { background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .35); }
+.banner.info { background: rgba(96, 165, 250, .1); border: 1px solid rgba(96, 165, 250, .35); }
 .banner.error { background: rgba(248, 113, 113, .1); border: 1px solid rgba(248, 113, 113, .35); }
 
 footer {

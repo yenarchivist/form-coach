@@ -22,6 +22,9 @@
         <button class="ex-btn active" data-ex="squat">🏋️ 스쿼트</button>
         <button class="ex-btn" data-ex="pushup">💪 푸시업</button>
         <button class="ex-btn" data-ex="plank">🧘 플랭크</button>
+        <button class="ex-btn" data-ex="bulgarian">🦵 불가리안</button>
+        <button class="ex-btn" data-ex="rdl">🏋️ 루마니안 데드</button>
+        <button class="ex-btn" data-ex="latpull">⬇️ 랫풀다운</button>
       </div>
 
       <label id="drop-zone" for="file-input">
@@ -52,6 +55,7 @@
       <div id="view-warning" class="banner warn" hidden>
         ⚠️ 정면에서 찍은 영상 같아요. 깊이·무릎 판정이 부정확할 수 있어요. 다음엔 <strong>측면</strong>에서 찍어보세요!
       </div>
+      <div id="ex-note" class="banner info" hidden></div>
 
       <div class="player-wrap">
         <video id="player" playsinline controls></video>
@@ -80,6 +84,6 @@
   <!-- 분석용 숨김 비디오 -->
   <video id="probe" muted playsinline style="position:fixed; left:-9999px; top:0; width:320px;"></video>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=4"></script>
 </body>
 </html>
